@@ -67,8 +67,14 @@ fold draws hexagons over lakes and a shore hexagon averages lake zeros in
 with its forest. With it, a hexagon over open water is not drawn and a
 shore hexagon is the mean of its land pixels. WATER MASK (the button, or
 `m`) is on by default and toggles in the kernel: the fold is re-run for the
-held box. STATE LINES (`s`) draws the six state boundaries on both panes,
-charcoal, browser-side like the wildlands.
+held box. ADMIN (`s`) draws the state and county boundaries on both panes
+from Overture Maps divisions, read live from Source Cooperative as PMTiles
+(cboettig/overturemaps): the browser range-reads the tiles it needs and the
+kernel never sees them. The basemap's own admin lines are hidden, so these
+are the only boundaries on the map. A click names its town, county and
+state: the state and county come from those same tiles in the browser, the
+town from one DuckDB point query against the Overture divisions GeoParquet
+on Source Cooperative (fused/overture), off the loop, 1 to 2 s.
 
 The uncertainty is opacity: a change smaller than the uncertainty of its
 two ends is drawn faint.
@@ -520,8 +526,9 @@ def _(mo):
     - **WILDLANDS** (`w`): the 426 Wildlands of New England (2022),
       conserved land left to natural process. Boundaries only, orange on
       both panes, at every zoom. A click inside one names it in the console.
-    - **STATE LINES** (`s`): the six state boundaries (Census TIGER 2024),
-      charcoal on both panes. **WATER MASK** (`m`, on by default): lakes,
+    - **ADMIN** (`s`): state and county boundaries from Overture Maps
+      divisions, read live from Source Cooperative as PMTiles. The basemap's
+      own admin lines are hidden. **WATER MASK** (`m`, on by default): lakes,
       ponds, reservoirs, bays and wide rivers from NHD HR (1 ha and up) leave
       the CTrees fold at the pixel level, so no hexagon is drawn over open
       water and a shore hexagon averages its land pixels only. Off, the fold
@@ -531,7 +538,8 @@ def _(mo):
       year on the slider marked. Under the RIGHT pane: the CTrees stock at
       both window ends, the change in Mg/ha and in Mg across the cell's
       hectares, the loss year, the uncertainty, the 26-year biomass series,
-      and the wildland the click fell in, if any. Both series share the same
+      the town, county and state the click fell in (Overture divisions, live
+      from Source Cooperative), and the wildland, if any. Both series share the same
       26 years, so the two charts line up.
     - `L` toggles the basemap labels, `F` full screen.
 
@@ -618,11 +626,24 @@ def _(SUPP, grid, tiles):
     # and up (water.py in the source repo). Rasterized per read box beside the
     # state clip and taken out of the fold at the pixel level. Never drawn.
     WATER_PATH = f"{SUPP}/nhd_water_bodies.parquet"
-    # the state lines: the six TIGER states as boundaries on both panes.
-    # Charcoal, and opaque: shared borders are drawn twice, once per state,
-    # and any alpha below 255 would show the overlap as a darker seam.
-    STATE_LINE = (35, 35, 40, 255)
-    STATE_WIDTH = 1.2
+    # ---- admin: Overture Maps divisions, live from Source Cooperative -------
+    # Two repositories, each for what it holds. cboettig/overturemaps
+    # (release 2026-02-18.0) has regions and counties as PMTiles: the browser
+    # range-reads the tiles it needs, draws the lines, and answers a click's
+    # state and county from the tiles it already has. Nothing crosses the
+    # kernel. fused/overture (release 2026-05-20-0) has the whole divisions
+    # theme as geo-partitioned GeoParquet, localities included, which the
+    # PMTiles are not: the town is one DuckDB point query against it with the
+    # bbox column pushed down, 9 s the first time (79 footers), 1 to 2 s after.
+    ADMIN_PM = "https://data.source.coop/cboettig/overturemaps/2026-02-18.0"
+    ADMIN_PQ = "s3://fused/overture/2026-05-20-0/theme=divisions/type=division_area/*.parquet"
+    ADMIN_STATES = ("US-CT", "US-MA", "US-ME", "US-NH", "US-RI", "US-VT")
+    # states charcoal and opaque, counties the same ink at half strength and
+    # thinner, so the two levels read as one family at two weights
+    ADMIN_LINE = (35, 35, 40, 255)
+    ADMIN_WIDTH = 1.2
+    ADMIN_COUNTY_LINE = (35, 35, 40, 130)
+    ADMIN_COUNTY_WIDTH = 0.8
 
     # the hex rings, hover and picked. One flat line each, drawn by MapLibre
     # rather than deck: deck has no shader-side AA on paths and the overlay is
@@ -737,9 +758,14 @@ def _(SUPP, grid, tiles):
         RING_W,
         SCALE0,
         SETTLE,
-        STATE_LINE,
+        ADMIN_COUNTY_LINE,
+        ADMIN_COUNTY_WIDTH,
+        ADMIN_LINE,
+        ADMIN_PM,
+        ADMIN_PQ,
+        ADMIN_STATES,
+        ADMIN_WIDTH,
         STATE_PATH,
-        STATE_WIDTH,
         STRIP_MINIMAL,
         VIEW_H,
         VIEW_W,
@@ -1192,12 +1218,11 @@ def _(STATE_GEOM, asyncio, grid, np, tiles, time):
 
 
 @app.cell
-def _(STATE_PATH, WILD_PATH, np, read_gpq):
-    # ---- the wildlands and the state lines: every ring, once ------------------
-    # deck's binary path format: one float32 lon/lat run and the vertex index
-    # each ring starts at, which is what a PathLayer wants. 426 polygons and
-    # about 105,000 vertices for the wildlands, six polygons and 58,000 for
-    # the states, so both are read whole at build and never again.
+def _(WILD_PATH, np, read_gpq):
+    # ---- the wildlands: every ring, once ------------------------------------
+    # one float32 lon/lat run and the vertex index each ring starts at: a
+    # compact way across the wire, unpacked to GeoJSON once. 426 polygons and
+    # about 105,000 vertices, read whole at build and never again.
     def rings_of(geoms):
         """(float32 lon/lat pairs, uint32 ring starts, how many polygons)."""
         xs, starts, at = [], [0], 0
@@ -1219,11 +1244,6 @@ def _(STATE_PATH, WILD_PATH, np, read_gpq):
 
     def wild_rings():
         return rings_of(read_gpq(WILD_PATH, columns=["geometry"]).geometry.values)
-
-    def state_rings():
-        """The six states, not the dissolved row: the internal borders are the point."""
-        g = read_gpq(STATE_PATH, columns=["kind", "geometry"])
-        return rings_of(g[g.kind == "state"].geometry.values)
 
     # the click: which wildland, if any, the point falls in. 426 polygons, so
     # the whole frame with its attributes is held once and the sindex answers
@@ -1247,7 +1267,79 @@ def _(STATE_PATH, WILD_PATH, np, read_gpq):
         return {"name": r.PropName, "owner": r.FeeOwner, "state": r.State,
                 "acres": float(r.AcresGIS), "year": int(r.YearOrig)}
 
-    return state_rings, wild_at, wild_rings
+    return wild_at, wild_rings
+
+
+@app.cell
+def _(ADMIN_PQ, duckdb):
+    # ---- the town: one point query against fused/overture, live ---------------
+    # Overture's division_area as Fused geo-partitions it on Source Cooperative:
+    # 79 GeoParquet files, 6.3 GB, each row with a bbox struct. DuckDB reads
+    # the footers, keeps the row groups whose bbox stats can hold the point,
+    # and runs ST_Contains on what is left. Its own connection, a cursor per
+    # call so a click and the warm-up can overlap, and the object cache on so
+    # the footers are read once: the first call is about 9 s, the rest 1 to 2.
+    import threading as _th
+
+    _dv = {"con": None, "err": None}
+    _lock = _th.Lock()
+
+    def _connect():
+        with _lock:
+            if _dv["con"] is None and _dv["err"] is None:
+                try:
+                    c = duckdb.connect()
+                    for ext in ("spatial", "httpfs"):
+                        try:
+                            c.execute(f"LOAD {ext}")
+                        except Exception:
+                            c.execute(f"INSTALL {ext}; LOAD {ext}")
+                    # the bucket is public; DuckDB still wants a secret to
+                    # sign with, so it gets an empty one for this endpoint
+                    c.execute(
+                        "CREATE SECRET IF NOT EXISTS source_coop (TYPE s3, PROVIDER config, KEY_ID '', SECRET '', "
+                        "REGION 'us-west-2', ENDPOINT 'data.source.coop', URL_STYLE 'path', USE_SSL true); "
+                        "SET enable_object_cache=true;"
+                    )
+                    _dv["con"] = c
+                except Exception as e:
+                    _dv["err"] = e
+            return _dv["con"]
+
+    _Q = (
+        "SELECT subtype, names.primary AS name, region "
+        f"FROM read_parquet('{ADMIN_PQ}', hive_partitioning=0) "
+        "WHERE bbox.xmin <= $x AND bbox.xmax >= $x AND bbox.ymin <= $y AND bbox.ymax >= $y "
+        "AND country = 'US' AND class = 'land' AND subtype IN ('region', 'county', 'locality') "
+        "AND ST_Contains(geometry, ST_Point($x, $y))"
+    )
+
+    def division_at(lon, lat):
+        """{town, county, state, state_code} for the point, any of them None.
+        Raises on a failed read so the caller can say so."""
+        c = _connect()
+        if c is None:
+            raise _dv["err"]
+        rows = c.cursor().execute(_Q, {"x": float(lon), "y": float(lat)}).fetchall()
+        out = {"town": None, "county": None, "state": None, "state_code": None}
+        for sub, name, region in rows:
+            if sub == "locality" and out["town"] is None:
+                out["town"] = name
+            elif sub == "county" and out["county"] is None:
+                out["county"] = name
+            elif sub == "region" and out["state"] is None:
+                out["state"], out["state_code"] = name, (region or "").split("-")[-1] or None
+        return out
+
+    # the footers, read now rather than on the first click
+    def _warm():
+        try:
+            division_at(-68.72, 45.96)
+        except Exception:
+            pass
+
+    _th.Thread(target=_warm, daemon=True).start()
+    return (division_at,)
 
 
 @app.cell
@@ -1376,25 +1468,24 @@ def _(anywidget, asyncio, traitlets):
         keyed by year and mode.
         RIGHT: an H3HexagonLayer (highPrecision) from cell ids + rgba. Hover on
         either pane: h3-js cell at the frame's res, its ring drawn on BOTH.
-        The wildland boundaries are one PathLayer on each pane, never filled,
-        fed deck's binary path format once at build.
+        The wildland and state boundaries are MapLibre line layers on each
+        pane, never filled, built once from the binary rings sent at build.
 
         Kernel -> browser: `cells` (uint64 LE), `colors` (rgba u8), `wild_xy`
         (float32 lon/lat) + `wild_idx` (uint32 ring starts, both set once),
-        `state_xy` + `state_idx` (the same for the six states), `config` (JSON),
+        `config` (JSON),
         `status` / `panel` (right, the CTrees story) / `panel_l` (left, the
         NDVI series) / `legend` (strings for the strip), custom `tile`
         replies.
         Browser -> kernel: `view` (JSON lon/lat/zoom + the pane's w/h on every
-        moveend), `pick` (JSON: the clicked cell as hex, or null), `ctl`
+        moveend), `pick` (JSON: the clicked cell as hex, or null, with the
+        state and county under the click from the admin tiles), `ctl`
         (JSON: year, mode, scale, the window, fill, labels, water, refresh)."""
 
         cells = traitlets.Bytes(b"").tag(sync=True)
         colors = traitlets.Bytes(b"").tag(sync=True)
         wild_xy = traitlets.Bytes(b"").tag(sync=True)
         wild_idx = traitlets.Bytes(b"").tag(sync=True)
-        state_xy = traitlets.Bytes(b"").tag(sync=True)
-        state_idx = traitlets.Bytes(b"").tag(sync=True)
         config = traitlets.Unicode("{}").tag(sync=True)
         status = traitlets.Unicode("").tag(sync=True)
         panel = traitlets.Unicode("").tag(sync=True)
@@ -1472,6 +1563,7 @@ def _(anywidget, asyncio, traitlets):
         // Two static files, one version each.
         const H3_URL = "https://cdn.jsdelivr.net/npm/h3-js@4.5.0/dist/h3-js.umd.js";
         const DECK_URL = "https://cdn.jsdelivr.net/npm/deck.gl@9.3.10/dist.min.js";
+        const PMTILES_URL = "https://cdn.jsdelivr.net/npm/pmtiles@4.5.0/dist/pmtiles.js";
         function loadScript(url, ready) {
           if (ready()) return Promise.resolve();
           return new Promise((ok, bad) => {
@@ -1484,7 +1576,11 @@ def _(anywidget, asyncio, traitlets):
         }
         await loadScript(H3_URL, () => !!globalThis.h3?.cellToBoundary);
         await loadScript(DECK_URL, () => !!globalThis.deck?.MapboxOverlay);
-        const {MapboxOverlay, BitmapLayer, PathLayer, TileLayer, H3HexagonLayer} = globalThis.deck;
+        await loadScript(PMTILES_URL, () => !!globalThis.pmtiles?.Protocol);
+        // the admin tiles come straight off the Source Cooperative bucket by
+        // range request: one protocol handler, shared by both maps
+        maplibregl.addProtocol("pmtiles", new globalThis.pmtiles.Protocol().tile);
+        const {MapboxOverlay, BitmapLayer, TileLayer, H3HexagonLayer} = globalThis.deck;
         const {latLngToCell, getResolution, cellToBoundary} = globalThis.h3;
 
         const STYLE = "https://tiles.openfreemap.org/styles/positron";
@@ -1567,7 +1663,7 @@ def _(anywidget, asyncio, traitlets):
           const labCss = "font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#6b6b68";
           let year = cfg.year, fill = cfg.fill || "change", labelsOn = cfg.labels !== false;
           let picMode = cfg.pic_mode || "tc";
-          let wildOn = !!cfg.wild, stateOn = !!cfg.state_lines, waterOn = cfg.water !== false;
+          let wildOn = !!cfg.wild, adminOn = !!cfg.admin, waterOn = cfg.water !== false;
           let scale = Number(cfg.scale) || 1;
           let y0 = cfg.win_from, y1 = cfg.win_to;
           const picYears = cfg.pic_years || [];
@@ -1767,14 +1863,16 @@ def _(anywidget, asyncio, traitlets):
               w.title = "Wildlands of New England 2022 (Harvard Forest HF435), boundaries only";
               legendL.appendChild(w);
             }
-            if (stateOn) {
+            if (adminOn) {
               const w = document.createElement("span");
               w.style.cssText = "display:inline-flex;align-items:center;gap:.35rem";
               const chip = document.createElement("span");
-              chip.style.cssText = "display:inline-block;width:14px;height:0;border-top:2px solid rgba(" + (cfg.state_line || [35, 35, 40, 255]).join(",") + ")";
-              const t = document.createElement("span"); t.textContent = "state lines"; t.style.opacity = ".75";
-              w.append(chip, t);
-              w.title = "the six states, Census TIGER 2024, boundaries only";
+              chip.style.cssText = "display:inline-block;width:14px;height:0;border-top:2px solid rgba(" + (cfg.admin_line || [35, 35, 40, 255]).join(",") + ")";
+              const chip2 = document.createElement("span");
+              chip2.style.cssText = "display:inline-block;width:14px;height:0;border-top:1px solid rgba(" + (cfg.admin_county_line || [35, 35, 40, 130]).join(",") + ")";
+              const t = document.createElement("span"); t.textContent = "states · counties"; t.style.opacity = ".75";
+              w.append(chip, chip2, t);
+              w.title = "Overture Maps divisions, PMTiles on Source Cooperative (cboettig/overturemaps)";
               legendL.appendChild(w);
             }
           };
@@ -1818,8 +1916,8 @@ def _(anywidget, asyncio, traitlets):
           // the geometry is already in the browser, so this never asks the kernel
           const wildBtn = mkBtn("wildlands", "the " + (cfg.wild_n || 426) + " Wildlands of New England (2022), boundaries only, gold on both panes (w)", wildOn);
           wildBtn.onclick = () => { wildOn = !wildOn; onCss(wildBtn, wildOn); update(); renderLegendL(); };
-          const stateBtn = mkBtn("state lines", "the six state boundaries (Census TIGER 2024), charcoal on both panes (s)", stateOn);
-          stateBtn.onclick = () => { stateOn = !stateOn; onCss(stateBtn, stateOn); update(); renderLegendL(); };
+          const adminBtn = mkBtn("admin", "state and county boundaries, Overture Maps divisions read live from Source Cooperative, on both panes (s)", adminOn);
+          adminBtn.onclick = () => { adminOn = !adminOn; onCss(adminBtn, adminOn); update(); renderLegendL(); };
           // the mask lives in the kernel's fold, so this one asks and waits
           const waterBtn = mkBtn("water mask", "leave lakes, ponds, reservoirs, bays and wide rivers (NHD HR, 1 ha and up) out of the CTrees fold: no hexagon over open water, and a shore hexagon averages its land pixels only (m)", waterOn);
           waterBtn.onclick = () => { waterOn = !waterOn; onCss(waterBtn, waterOn); send("water", {water: waterOn}); };
@@ -1956,7 +2054,7 @@ def _(anywidget, asyncio, traitlets):
 
           const hint = document.createElement("div");
           hint.style.cssText = mono + ";opacity:.55;color:#666";
-          hint.textContent = "keys: [ ] year · b blink first/last year · n true colour / NDVI · ; ' scale · 1-2 fill · - = window from · _ + window to · w wildlands · s state lines · m water mask · L labels · F full screen · click a hexagon for its story";
+          hint.textContent = "keys: [ ] year · b blink first/last year · n true colour / NDVI · ; ' scale · 1-2 fill · - = window from · _ + window to · w wildlands · s admin · m water mask · L labels · F full screen · click a hexagon for its story";
           strip.appendChild(hint);
           hint.hidden = !!cfg.minimal;
           const step = (arr, cur, d) => { const i = arr.indexOf(cur); return arr[Math.max(0, Math.min(arr.length - 1, (i < 0 ? 0 : i) + d))]; };
@@ -1978,7 +2076,7 @@ def _(anywidget, asyncio, traitlets):
             // ends of the record, without stepping through 24 years to get there
             else if (k === "b" || k === "B") { const a = picYears[0], z = picYears[picYears.length - 1]; if (a != null && z != null) { const from = year; year = (year === z) ? a : z; noteYear(from, year); styleYear(); update(); yrRelease(); } }
             else if (k === "w" || k === "W") { wildBtn.onclick(); }
-            else if (k === "s" || k === "S") { stateBtn.onclick(); }
+            else if (k === "s" || k === "S") { adminBtn.onclick(); }
             else if (k === "m" || k === "M") { waterBtn.onclick(); }
             else if (k === "l" || k === "L") { labBtn.onclick(); }
             else if (k === "f" || k === "F") { toggleFull(); }
@@ -2022,7 +2120,7 @@ def _(anywidget, asyncio, traitlets):
 
           // ---- the data ----------------------------------------------------
           let hexes = [], N = 0, colors = null, res = -1, hexIndex = new Map(), dataObj = null;
-          let wild = null, stateRings = null;
+          let wild = null, wildGeo = null;
           const raw = {cells: null, colors: null};
           const grab = (k) => {
             try { const u8 = bytesOf(model.get(k)); raw[k] = u8 && u8.length ? copyOf(u8) : null; }
@@ -2050,9 +2148,19 @@ def _(anywidget, asyncio, traitlets):
             return starts.length > 1 ? {length: starts.length - 1, startIndices: starts,
               attributes: {getPath: {value: coords, size: 2}}} : null;
           };
+          // the same rings as GeoJSON, once: what a MapLibre source wants
+          const geoOf = (p) => {
+            if (!p) return null;
+            const xy = p.attributes.getPath.value, st = p.startIndices, lines = [];
+            for (let i = 0; i + 1 < st.length; i++) {
+              const line = [];
+              for (let j = st[i]; j < st[i + 1]; j++) line.push([xy[2 * j], xy[2 * j + 1]]);
+              if (line.length > 1) lines.push(line);
+            }
+            return {type: "Feature", geometry: {type: "MultiLineString", coordinates: lines}, properties: {}};
+          };
           function loadWild() {
-            try { wild = pathsOf("wild_xy", "wild_idx"); } catch (e) { wild = null; say("wildlands: " + e.message); }
-            try { stateRings = pathsOf("state_xy", "state_idx"); } catch (e) { stateRings = null; say("state lines: " + e.message); }
+            try { wild = pathsOf("wild_xy", "wild_idx"); wildGeo = geoOf(wild); } catch (e) { wild = null; wildGeo = null; say("wildlands: " + e.message); }
           }
 
           // ---- the picture tiles: ask the kernel -----------------------------
@@ -2241,30 +2349,41 @@ def _(anywidget, asyncio, traitlets):
               return new BitmapLayer(p, {data: null, image: p.data, bounds: [west, south, east, north]});
             },
           });
-          // boundaries only, never filled: one opaque orange line per pane
-          const wildLayer = (side) => (wildOn && wild) ? new PathLayer({
-            id: "wild-" + side,
-            data: wild,
-            _pathType: "loop",
-            positionFormat: "XY",
-            getColor: cfg.wild_line || [255, 199, 44, 255],
-            widthUnits: "pixels", getWidth: cfg.wild_width || 1.4, widthMinPixels: 1,
-            filled: false,
-            parameters: {depthTest: false},
-            beforeId: slot(),
-          }) : null;
-          // the six states as boundaries, opaque, never filled
-          const stateLayer = (side) => (stateOn && stateRings) ? new PathLayer({
-            id: "state-" + side,
-            data: stateRings,
-            _pathType: "loop",
-            positionFormat: "XY",
-            getColor: cfg.state_line || [35, 35, 40, 255],
-            widthUnits: "pixels", getWidth: cfg.state_width || 1.2, widthMinPixels: 1,
-            filled: false,
-            parameters: {depthTest: false},
-            beforeId: slot(),
-          }) : null;
+          // The wildland boundaries are a MapLibre line layer too, for the
+          // same reason as the rings: as a deck PathLayer it came out
+          // stair-stepped. MapLibre's geojson source also simplifies the
+          // rings per zoom on its own. One source and one layer, added
+          // once, toggled by visibility, and re-seated under the label slot
+          // on every update, since the interleaved overlay re-inserts the
+          // deck layers at that slot and would otherwise bury it under the
+          // mosaic.
+          const BOUNDS = [
+            {key: "wild", on: () => wildOn, geo: () => wildGeo, color: () => cfg.wild_line || [255, 199, 44, 255], w: () => cfg.wild_width || 1.4},
+          ];
+          const bSrc = (k) => "bound-" + k + "-src", bLyr = (k) => "bound-" + k + "-line";
+          const boundsSync = (m) => {
+            if (!m || !m.isStyleLoaded()) return;
+            for (const b of BOUNDS) {
+              const g = b.geo();
+              if (!g) continue;
+              if (!m.getSource(bSrc(b.key))) {
+                const c = b.color();
+                try {
+                  m.addSource(bSrc(b.key), {type: "geojson", data: g, tolerance: 0.35});
+                  m.addLayer({
+                    id: bLyr(b.key), type: "line", source: bSrc(b.key),
+                    layout: {"line-cap": "round", "line-join": "round", visibility: b.on() ? "visible" : "none"},
+                    paint: {"line-color": rgbOf(c), "line-width": b.w(), "line-opacity": alphaOf(c)},
+                  }, slot());
+                } catch (e) { say("boundary " + b.key + ": " + ((e && e.message) || e)); continue; }
+              }
+              try {
+                m.setLayoutProperty(bLyr(b.key), "visibility", b.on() ? "visible" : "none");
+                const before = slot();
+                if (before) m.moveLayer(bLyr(b.key), before);
+              } catch (e) {}
+            }
+          };
           // the hovered cell's own fill, moved one step away from where it
           // sits: pale cells down, dark cells up. One cell, one H3HexagonLayer
           // over the fills, so it is polygons all the way and nothing aliases.
@@ -2292,14 +2411,68 @@ def _(anywidget, asyncio, traitlets):
               highPrecision: true, pickable: false, beforeId: slot(),
             });
           };
+          // The admin lines: Overture divisions as PMTiles on Source
+          // Cooperative, one vector source per level, tiles range-read by the
+          // browser as it moves. Two layers per level: a line, toggled by the
+          // button, and a fill at zero opacity that is never seen and never
+          // toggled, so queryRenderedFeatures can answer which state and
+          // county a click fell in from the tiles already on screen. Land
+          // rows in the six states only: the maritime rows would draw the
+          // 3 nmi limit through the sea, and the NY towns are not the story.
+          const ADMIN = [
+            {key: "regions", color: () => cfg.admin_line || [35, 35, 40, 255], w: () => cfg.admin_width || 1.2},
+            {key: "counties", color: () => cfg.admin_county_line || [35, 35, 40, 130], w: () => cfg.admin_county_width || 0.8},
+          ];
+          const aSrc = (k) => "admin-" + k + "-src", aLine = (k) => "admin-" + k + "-line", aFill = (k) => "admin-" + k + "-fill";
+          const adminFilter = () => ["all", ["==", ["get", "class"], "land"],
+            ["in", ["get", "region"], ["literal", cfg.admin_states || ["US-CT", "US-MA", "US-ME", "US-NH", "US-RI", "US-VT"]]]];
+          const adminSync = (m) => {
+            if (!m || !m.isStyleLoaded() || !cfg.admin_pm) return;
+            for (const a of ADMIN) {
+              if (!m.getSource(aSrc(a.key))) {
+                const c = a.color();
+                try {
+                  m.addSource(aSrc(a.key), {type: "vector", url: "pmtiles://" + cfg.admin_pm + "/" + a.key + ".pmtiles"});
+                  m.addLayer({
+                    id: aFill(a.key), type: "fill", source: aSrc(a.key), "source-layer": a.key,
+                    filter: adminFilter(), paint: {"fill-opacity": 0},
+                  }, slot());
+                  m.addLayer({
+                    id: aLine(a.key), type: "line", source: aSrc(a.key), "source-layer": a.key,
+                    filter: adminFilter(),
+                    layout: {"line-cap": "round", "line-join": "round", visibility: adminOn ? "visible" : "none"},
+                    paint: {"line-color": rgbOf(c), "line-width": a.w(), "line-opacity": alphaOf(c)},
+                  }, slot());
+                } catch (e) { say("admin " + a.key + ": " + ((e && e.message) || e)); continue; }
+              }
+              try {
+                m.setLayoutProperty(aLine(a.key), "visibility", adminOn ? "visible" : "none");
+                const before = slot();
+                if (before) { m.moveLayer(aFill(a.key), before); m.moveLayer(aLine(a.key), before); }
+              } catch (e) {}
+            }
+          };
+          // the state and county under a point, from the tiles on screen.
+          // Empty when the tiles are not in yet; the kernel's town query
+          // fills the same fields then.
+          const adminAt = (m, pt) => {
+            const out = {};
+            const one = (key) => {
+              if (!m.getLayer(aFill(key))) return null;
+              const fs = m.queryRenderedFeatures(pt, {layers: [aFill(key)]});
+              return fs && fs.length ? fs[0].properties : null;
+            };
+            try {
+              const r = one("regions");
+              if (r) { out.state = r.name_en || r["names.primary"] || null; out.state_code = (r.region || "").split("-").pop() || null; }
+              const c = one("counties");
+              if (c) out.county = c.name_en || c["names.primary"] || null;
+            } catch (e) {}
+            return out;
+          };
           const hexZoomOk = () => !!mapR && mapR.getZoom() >= (cfg.hex_zoom || 9);
           function layersLeft() {
-            const out = [mkRaster(picSpec())];
-            const wl = wildLayer("l");
-            if (wl) out.push(wl);
-            const sl = stateLayer("l");
-            if (sl) out.push(sl);
-            return out;
+            return [mkRaster(picSpec())];
           }
           function layersRight() {
             const out = [];
@@ -2323,10 +2496,6 @@ def _(anywidget, asyncio, traitlets):
               const hl = liftLayer(hover);
               if (hl) out.push(hl);
             }
-            const wr = wildLayer("r");
-            if (wr) out.push(wr);
-            const sr = stateLayer("r");
-            if (sr) out.push(sr);
             return out;
           }
           function update() {
@@ -2334,9 +2503,25 @@ def _(anywidget, asyncio, traitlets):
             if (ovR) ovR.setProps({layers: layersRight()});
             ringsSetup(mapL); ringsData(mapL, true); ringsTop(mapL);
             ringsSetup(mapR); ringsData(mapR, false); ringsTop(mapR);
+            boundsSync(mapL); boundsSync(mapR);
+            adminSync(mapL); adminSync(mapR);
           }
           function updateHover() { update(); }
 
+          // the basemap's own admin lines (Positron draws admin levels 2 to
+          // 6: countries, states, counties) are hidden for good, so the only
+          // boundaries on the map are the ones the ADMIN button draws.
+          function hideBasemapBoundaries() {
+            for (const m of [mapL, mapR]) {
+              if (!m || !m.isStyleLoaded()) continue;
+              const st = m.getStyle();
+              if (!st || !st.layers) continue;
+              st.layers.forEach((l) => {
+                if (l["source-layer"] === "boundary")
+                  m.setLayoutProperty(l.id, "visibility", "none");
+              });
+            }
+          }
           function labels(on) {
             for (const m of [mapL, mapR]) {
               if (!m || !m.isStyleLoaded()) continue;
@@ -2401,7 +2586,7 @@ def _(anywidget, asyncio, traitlets):
             mapL.on("move", follow(mapL, mapR));
             mapR.on("move", follow(mapR, mapL));
             let ready = 0;
-            const onLoad = () => { ready++; if (ready === 2) { labels(labelsOn); update(); sendView(); } };
+            const onLoad = () => { ready++; if (ready === 2) { hideBasemapBoundaries(); labels(labelsOn); update(); sendView(); } };
             mapL.on("load", onLoad); mapR.on("load", onLoad);
             mapL.on("moveend", sendView); mapR.on("moveend", sendView);
             mapL.on("zoom", () => update());
@@ -2414,7 +2599,7 @@ def _(anywidget, asyncio, traitlets):
               m.on("mouseout", () => { if (hover) { hover = null; updateHover(); } });
               m.on("click", (e) => {
                 const h = cellAt(e.lngLat);
-                model.set("pick", JSON.stringify({cell: h, lon: e.lngLat.lng, lat: e.lngLat.lat, n: ++seq}));
+                model.set("pick", JSON.stringify({cell: h, lon: e.lngLat.lng, lat: e.lngLat.lat, admin: adminAt(m, e.point), n: ++seq}));
                 model.save_changes();
               });
               m.on("error", (ev) => { if (ev && ev.error && ev.error.message) say("map: " + ev.error.message); });
@@ -2487,8 +2672,12 @@ def _(
     RING_PICK_W,
     RING_W,
     SCALE0,
-    STATE_LINE,
-    STATE_WIDTH,
+    ADMIN_COUNTY_LINE,
+    ADMIN_COUNTY_WIDTH,
+    ADMIN_LINE,
+    ADMIN_PM,
+    ADMIN_STATES,
+    ADMIN_WIDTH,
     STRIP_MINIMAL,
     VIEW_H,
     WILD_LINE,
@@ -2497,17 +2686,14 @@ def _(
     WIN_TO0,
     YEAR0,
     json,
-    state_rings,
     wild_rings,
 ):
     # ---- the map: built ONCE, empty; never re-runs for a parameter ---------------
-    # the wildland and state rings cross once, here. Those buttons are
-    # browser-side after this, so `wild` and `state_lines` are never reconciled
+    # the wildland rings cross once, here. That button and ADMIN are
+    # browser-side after this, so `wild` and `admin` are never reconciled
     # from config the way the other controls are. `water` is: it is a fold.
     _wild_xy, _wild_idx, _wild_n = wild_rings()
-    _st_xy, _st_idx, _st_n = state_rings()
-    pair = PairMap(wild_xy=_wild_xy.tobytes(), wild_idx=_wild_idx.tobytes(),
-                   state_xy=_st_xy.tobytes(), state_idx=_st_idx.tobytes(), config=json.dumps({
+    pair = PairMap(wild_xy=_wild_xy.tobytes(), wild_idx=_wild_idx.tobytes(), config=json.dumps({
         "height": VIEW_H, "home": dict(HOME), "labels": True, "labels_slot": LABELS_SLOT, "tile": RASTER_TILE,
         "year": YEAR0, "pic_years": list(PIC_YEARS), "scale": SCALE0, "scale_gen": 0,
         "pic_mode": "tc", "pic_modes": [list(m) for m in PIC_MODES],
@@ -2517,7 +2703,9 @@ def _(
         "win_from": WIN_FROM0, "win_to": WIN_TO0, "win_years": list(CT_YEARS),
         "wild": False, "wild_n": _wild_n,
         "wild_line": list(WILD_LINE), "wild_width": WILD_WIDTH,
-        "state_lines": False, "state_line": list(STATE_LINE), "state_width": STATE_WIDTH,
+        "admin": False, "admin_pm": ADMIN_PM, "admin_states": list(ADMIN_STATES),
+        "admin_line": list(ADMIN_LINE), "admin_width": ADMIN_WIDTH,
+        "admin_county_line": list(ADMIN_COUNTY_LINE), "admin_county_width": ADMIN_COUNTY_WIDTH,
         "water": True,
         "hex_zoom": HEX_ZOOM,
         "hl_lift": HL_LIFT, "hl_mid": HL_MID, "hl_flat": list(HL_FLAT),
@@ -2576,6 +2764,7 @@ def _(
     traceback,
     view_to_bbox,
     wild_at,
+    division_at,
 ):
     # ---- wiring: the camera loop and the controls. Re-runs freely. ---------------
     try:
@@ -2941,6 +3130,25 @@ def _(
                     l3 = f"Uncertainty ±{u1:.0f} Mg/ha at {y1} ({100 * min(ush, 9.99):.0f}% of the stock); the change is {zt} it ({_f(z, 1)}×)."
                 else:
                     l3 = "No uncertainty here."
+                # where: the town, county and state. State and county came
+                # with the click from the admin tiles in the browser; the
+                # town is a query against Source Cooperative, so it lands
+                # after, like the NDVI series, if the cell is still picked.
+                adm = p.get("admin") or {}
+
+                def _place(town, county, st, pending):
+                    bits = []
+                    if town:
+                        bits.append(f"<b>{town}</b>")
+                    elif pending:
+                        bits.append("<span style='opacity:.5'>town…</span>")
+                    if county:
+                        bits.append(county)
+                    if st:
+                        bits.append(st)
+                    return ", ".join(bits)
+
+                l0 = _place(None, adm.get("county"), adm.get("state_code"), True) if lon is not None else ""
                 wl = wild_at(lon, lat) if lon is not None and lat is not None else None
                 if wl:
                     yr = f"since {wl['year']}" if wl["year"] > 0 else "origin year unrecorded"
@@ -2950,7 +3158,7 @@ def _(
                     l4 = ""
                 detail = f"{CELL_KM2.get(HOLD['res'], 0):.3f} km²{where}"
                 pair.panel = (
-                    f"<div style='font-size:14px;line-height:1.5'>{l1}<br>{l2}<br>{l3}{l4}{_spark(series, y0, y1, useries)}</div>"
+                    f"<div style='font-size:14px;line-height:1.5'>{l0}{'<br>' if l0 else ''}{l1}<br>{l2}<br>{l3}{l4}{_spark(series, y0, y1, useries)}</div>"
                     + ("" if STRIP_MINIMAL else f"<div style='font-size:12px;color:#777'>{detail}</div>")
                 )
                 # The ring and the CTrees story go out now. The mosaic NDVI
@@ -2989,6 +3197,22 @@ def _(
                     pair.panel_l = spark.replace("</svg></div>", "</svg>" + _source_note(sc, spx) + "</div>", 1)
 
                 _spawn(_ndvi_later())
+
+                async def _place_later(cell=cell, lon=lon, lat=lat, l0=l0, adm=adm):
+                    if not l0:
+                        return
+                    try:
+                        d = await asyncio.to_thread(division_at, lon, lat)
+                    except Exception as e:
+                        d = {}
+                        _say(f"town (fused/overture): {e}")
+                    if HOLD["hit"] != cell:
+                        return
+                    l0n = _place(d.get("town"), adm.get("county") or d.get("county"),
+                                 adm.get("state_code") or d.get("state_code"), False)
+                    pair.panel = pair.panel.replace(l0, l0n, 1)
+
+                _spawn(_place_later())
                 return
         except Exception as e:
             pair.panel = f"<span style='opacity:.7'>click: {e}</span>"

@@ -39,10 +39,14 @@ the panels mean.
   Icechunk store on AWS Open Data.
 - Wildlands of New England GIS Data 1900-2022, Harvard Forest Data
   Archive HF435, Foster, Johnson and Hall 2023. CC0.
-- State boundaries from TIGER/Line 2024, U.S. Census Bureau. Water bodies
-  from the National Hydrography Dataset High Resolution, USGS. Both public
-  domain. The three boundary layers ship beside the mosaic in the bucket's
+- The New England clip from TIGER/Line 2024, U.S. Census Bureau. Water
+  bodies from the National Hydrography Dataset High Resolution, USGS. Both
+  public domain. These ship beside the mosaic in the bucket's
   `supplemental/` folder with their own README.
+- Overture Maps divisions (CDLA Permissive 2.0), read live from two Source
+  Cooperative repositories: state and county boundaries as PMTiles from
+  cboettig/overturemaps (release 2026-02-18.0), and the town under a click
+  from the GeoParquet in fused/overture (release 2026-05-20-0).
 - Basemap tiles by OpenFreeMap, place search by Photon (komoot), both on
   OpenStreetMap data (ODbL).
 

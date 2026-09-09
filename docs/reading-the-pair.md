@@ -21,7 +21,9 @@ level 0 at 30 m.
 - **Find**: a place name; Enter or a click flies both maps there.
 - **Wildlands** (`w`): the 426 Wildlands of New England (2022), conserved
   land left to natural process, drawn as orange boundaries on both panes.
-- **State lines** (`s`): the six state boundaries, charcoal, on both panes.
+- **Admin** (`s`): state and county boundaries from Overture Maps
+  divisions, read live from Source Cooperative as PMTiles, charcoal on
+  both panes. The basemap's own admin lines are hidden.
 - **Water mask** (`m`, on by default): lakes, ponds, reservoirs, bays and
   wide rivers of 1 ha and up leave the CTrees fold at the pixel level, so
   no hexagon is drawn over open water and a shore hexagon averages its
@@ -67,11 +69,16 @@ and the pyramid's `source` plane records it per pixel. The note names the
 share from the year before and the year after for the slider's year, and
 the share borrowed over all the years the rule was applied to.
 
-Under the right pane: the CTrees stock at both window ends, the change in
-Mg/ha and in Mg across the cell's hectares, the year the biomass first
-fell past the threshold and what came back since, the uncertainty at the
-to-end and how the change compares with it, the 26-year biomass series,
-and the wildland the click fell in, if any.
+Under the right pane, first the place: the town, county and state the
+click fell in, from Overture Maps divisions on Source Cooperative. The
+state and county are read in the browser from the admin tiles already on
+screen; the town is one DuckDB point query against the divisions
+GeoParquet in fused/overture, so it lands a second or two after the rest.
+Then the CTrees stock at both window ends, the change in Mg/ha and in Mg
+across the cell's hectares, the year the biomass first fell past the
+threshold and what came back since, the uncertainty at the to-end and how
+the change compares with it, the 26-year biomass series, and the wildland
+the click fell in, if any.
 
 Both series share the same 26 years, so the two charts line up.
 
