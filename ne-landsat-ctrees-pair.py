@@ -10,12 +10,12 @@
 #     "h3ronpy>=0.22.0",
 #     "pyarrow>=25.0.0",
 #     "anywidget>=0.9",
+#     "traitlets",
 #     "numpy",
 #     "duckdb>=1.5.5",
 #     "pillow",
 #     "geopandas>=1.1",
 #     "shapely>=2",
-#     "pandas",
 #     "rasterio",
 #     "obstore>=0.11",
 # ]
@@ -494,6 +494,8 @@ def _(PYRAMID, grid, http_store, math, np, time):
 def _(mo):
     mo.md("""
     # Landsat NE Pyramid, and CTrees beside it
+
+    [![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/kentstephen/ne-landsat-ctrees-marimo/blob/main/ne-landsat-ctrees-pair.py)
 
     **Left**: the New England leaf-on mosaic from the pyramid on the bucket, never
     covered. **Right**: one H3 fill of CTrees biomass over the same camera.
