@@ -1,5 +1,7 @@
 # New England Landsat mosaic, beside CTrees biomass
 
+[![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/kentstephen/ne-landsat-ctrees-marimo/blob/main/ne-landsat-ctrees-pair.py)
+
 One marimo notebook, two maps under one camera. On the left, the annual
 leaf-on Landsat mosaic of New England, 2000 to 2025, one year at a time,
 in true colour or NDVI. On the right, CTrees aboveground biomass folded
