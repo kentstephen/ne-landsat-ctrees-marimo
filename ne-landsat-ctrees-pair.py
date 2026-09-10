@@ -2248,7 +2248,7 @@ def _(anywidget, asyncio, traitlets):
           let slotId = null;
           const slot = () => {
             if (slotId !== null) return slotId || undefined;
-            const m = (mapL && mapL.isStyleLoaded()) ? mapL : ((mapR && mapR.isStyleLoaded()) ? mapR : null);
+            const m = up(mapL) ? mapL : (up(mapR) ? mapR : null);
             if (!m) return undefined;
             const want = cfg.labels_slot;
             if (want && m.getLayer(want)) { slotId = want; return slotId; }
@@ -2285,8 +2285,42 @@ def _(anywidget, asyncio, traitlets):
           const rgbOf = (c) => "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
           const alphaOf = (c) => (c[3] != null ? c[3] : 255) / 255;
           const EMPTY = {type: "FeatureCollection", features: []};
+          // Which maps have fired "load". isStyleLoaded() is the wrong gate
+          // for adding layers here: the interleaved deck overlay re-inserts
+          // its custom layers on every setProps, which marks the style
+          // changed until the next frame, so at the moment update() runs it
+          // answers false on every call after the first. Anything gated on
+          // it never gets added. The load event fires once and stays true.
+          const mapsUp = new WeakSet();
+          const up = (m) => !!m && mapsUp.has(m);
+          // The boundary lines (wildlands, admin) go under the label slot,
+          // above the deck layers. The deck overlay inserts its custom
+          // layers at that same slot, and not only inside setProps: it does
+          // it again from the render loop, after update() has returned, and
+          // on the left pane the mosaic raster is opaque, so a line seated
+          // once ends up buried. So the seat is checked on every styledata
+          // event, and a line is moved only when a custom layer sits above
+          // it; a move fires styledata again, and then nothing is out of
+          // place, so it settles.
+          const seated = [];
+          // getLayersOrder, not getStyle().layers: the serialized style
+          // leaves the custom layers out, so deck's are only visible here.
+          const seat = (m) => {
+            if (!up(m)) return;
+            const before = slot();
+            if (!before) return;
+            let ids;
+            try { ids = m.getLayersOrder(); } catch (e) { return; }
+            let lastCustom = -1;
+            ids.forEach((id, i) => { const l = m.getLayer(id); if (l && l.type === "custom") lastCustom = i; });
+            if (lastCustom < 0) return;
+            for (const id of seated) {
+              const i = ids.indexOf(id);
+              if (i >= 0 && i < lastCustom) { try { m.moveLayer(id, before); } catch (e) {} }
+            }
+          };
           const ringsSetup = (m) => {
-            if (!m || !m.isStyleLoaded()) return;
+            if (!up(m)) return;
             for (const r of RINGS) {
               if (m.getSource(srcId(r.key))) continue;
               const c = r.color();
@@ -2362,7 +2396,7 @@ def _(anywidget, asyncio, traitlets):
           ];
           const bSrc = (k) => "bound-" + k + "-src", bLyr = (k) => "bound-" + k + "-line";
           const boundsSync = (m) => {
-            if (!m || !m.isStyleLoaded()) return;
+            if (!up(m)) return;
             for (const b of BOUNDS) {
               const g = b.geo();
               if (!g) continue;
@@ -2375,13 +2409,10 @@ def _(anywidget, asyncio, traitlets):
                     layout: {"line-cap": "round", "line-join": "round", visibility: b.on() ? "visible" : "none"},
                     paint: {"line-color": rgbOf(c), "line-width": b.w(), "line-opacity": alphaOf(c)},
                   }, slot());
-                } catch (e) { say("boundary " + b.key + ": " + ((e && e.message) || e)); continue; }
+                  seated.push(bLyr(b.key));
+                } catch (e) { console.error("boundary " + b.key, e); say("boundary " + b.key + ": " + ((e && e.message) || e)); continue; }
               }
-              try {
-                m.setLayoutProperty(bLyr(b.key), "visibility", b.on() ? "visible" : "none");
-                const before = slot();
-                if (before) m.moveLayer(bLyr(b.key), before);
-              } catch (e) {}
+              try { m.setLayoutProperty(bLyr(b.key), "visibility", b.on() ? "visible" : "none"); } catch (e) {}
             }
           };
           // the hovered cell's own fill, moved one step away from where it
@@ -2423,11 +2454,11 @@ def _(anywidget, asyncio, traitlets):
             {key: "regions", color: () => cfg.admin_line || [35, 35, 40, 255], w: () => cfg.admin_width || 1.2},
             {key: "counties", color: () => cfg.admin_county_line || [35, 35, 40, 130], w: () => cfg.admin_county_width || 0.8},
           ];
-          const aSrc = (k) => "admin-" + k + "-src", aLine = (k) => "admin-" + k + "-line", aFill = (k) => "admin-" + k + "-fill";
+          const aSrc = (k) => "admin-" + k + "-src", aLine = (k) => "admin-" + k + "-line", aFill = (k) => "admin-" + k + "-fill", aCase = (k) => "admin-" + k + "-case";
           const adminFilter = () => ["all", ["==", ["get", "class"], "land"],
             ["in", ["get", "region"], ["literal", cfg.admin_states || ["US-CT", "US-MA", "US-ME", "US-NH", "US-RI", "US-VT"]]]];
           const adminSync = (m) => {
-            if (!m || !m.isStyleLoaded() || !cfg.admin_pm) return;
+            if (!up(m) || !cfg.admin_pm) return;
             for (const a of ADMIN) {
               if (!m.getSource(aSrc(a.key))) {
                 const c = a.color();
@@ -2437,18 +2468,27 @@ def _(anywidget, asyncio, traitlets):
                     id: aFill(a.key), type: "fill", source: aSrc(a.key), "source-layer": a.key,
                     filter: adminFilter(), paint: {"fill-opacity": 0},
                   }, slot());
+                  // a pale casing under the ink: charcoal alone sinks into
+                  // the dark mosaic on the left pane, and the casing lifts
+                  // it without changing its colour on the right
+                  m.addLayer({
+                    id: aCase(a.key), type: "line", source: aSrc(a.key), "source-layer": a.key,
+                    filter: adminFilter(),
+                    layout: {"line-cap": "round", "line-join": "round", visibility: adminOn ? "visible" : "none"},
+                    paint: {"line-color": "rgb(255,255,255)", "line-width": a.w() + 1.8, "line-opacity": 0.5},
+                  }, slot());
                   m.addLayer({
                     id: aLine(a.key), type: "line", source: aSrc(a.key), "source-layer": a.key,
                     filter: adminFilter(),
                     layout: {"line-cap": "round", "line-join": "round", visibility: adminOn ? "visible" : "none"},
                     paint: {"line-color": rgbOf(c), "line-width": a.w(), "line-opacity": alphaOf(c)},
                   }, slot());
-                } catch (e) { say("admin " + a.key + ": " + ((e && e.message) || e)); continue; }
+                  seated.push(aFill(a.key), aCase(a.key), aLine(a.key));
+                } catch (e) { console.error("admin " + a.key, e); say("admin " + a.key + ": " + ((e && e.message) || e)); continue; }
               }
               try {
+                m.setLayoutProperty(aCase(a.key), "visibility", adminOn ? "visible" : "none");
                 m.setLayoutProperty(aLine(a.key), "visibility", adminOn ? "visible" : "none");
-                const before = slot();
-                if (before) { m.moveLayer(aFill(a.key), before); m.moveLayer(aLine(a.key), before); }
               } catch (e) {}
             }
           };
@@ -2505,6 +2545,7 @@ def _(anywidget, asyncio, traitlets):
             ringsSetup(mapR); ringsData(mapR, false); ringsTop(mapR);
             boundsSync(mapL); boundsSync(mapR);
             adminSync(mapL); adminSync(mapR);
+            seat(mapL); seat(mapR);
           }
           function updateHover() { update(); }
 
@@ -2513,7 +2554,7 @@ def _(anywidget, asyncio, traitlets):
           // boundaries on the map are the ones the ADMIN button draws.
           function hideBasemapBoundaries() {
             for (const m of [mapL, mapR]) {
-              if (!m || !m.isStyleLoaded()) continue;
+              if (!up(m)) continue;
               const st = m.getStyle();
               if (!st || !st.layers) continue;
               st.layers.forEach((l) => {
@@ -2524,7 +2565,7 @@ def _(anywidget, asyncio, traitlets):
           }
           function labels(on) {
             for (const m of [mapL, mapR]) {
-              if (!m || !m.isStyleLoaded()) continue;
+              if (!up(m)) continue;
               const st = m.getStyle();
               if (!st || !st.layers) continue;
               st.layers.forEach((l) => {
@@ -2587,7 +2628,10 @@ def _(anywidget, asyncio, traitlets):
             mapR.on("move", follow(mapR, mapL));
             let ready = 0;
             const onLoad = () => { ready++; if (ready === 2) { hideBasemapBoundaries(); labels(labelsOn); update(); sendView(); } };
-            mapL.on("load", onLoad); mapR.on("load", onLoad);
+            mapL.once("load", () => { mapsUp.add(mapL); onLoad(); });
+            mapR.once("load", () => { mapsUp.add(mapR); onLoad(); });
+            mapL.on("styledata", () => seat(mapL));
+            mapR.on("styledata", () => seat(mapR));
             mapL.on("moveend", sendView); mapR.on("moveend", sendView);
             mapL.on("zoom", () => update());
             mapR.on("zoom", () => update());
