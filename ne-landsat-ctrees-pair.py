@@ -2454,7 +2454,7 @@ def _(anywidget, asyncio, traitlets):
             {key: "regions", color: () => cfg.admin_line || [35, 35, 40, 255], w: () => cfg.admin_width || 1.2},
             {key: "counties", color: () => cfg.admin_county_line || [35, 35, 40, 130], w: () => cfg.admin_county_width || 0.8},
           ];
-          const aSrc = (k) => "admin-" + k + "-src", aLine = (k) => "admin-" + k + "-line", aFill = (k) => "admin-" + k + "-fill", aCase = (k) => "admin-" + k + "-case";
+          const aSrc = (k) => "admin-" + k + "-src", aLine = (k) => "admin-" + k + "-line", aFill = (k) => "admin-" + k + "-fill";
           const adminFilter = () => ["all", ["==", ["get", "class"], "land"],
             ["in", ["get", "region"], ["literal", cfg.admin_states || ["US-CT", "US-MA", "US-ME", "US-NH", "US-RI", "US-VT"]]]];
           const adminSync = (m) => {
@@ -2468,28 +2468,16 @@ def _(anywidget, asyncio, traitlets):
                     id: aFill(a.key), type: "fill", source: aSrc(a.key), "source-layer": a.key,
                     filter: adminFilter(), paint: {"fill-opacity": 0},
                   }, slot());
-                  // a pale casing under the ink: charcoal alone sinks into
-                  // the dark mosaic on the left pane, and the casing lifts
-                  // it without changing its colour on the right
-                  m.addLayer({
-                    id: aCase(a.key), type: "line", source: aSrc(a.key), "source-layer": a.key,
-                    filter: adminFilter(),
-                    layout: {"line-cap": "round", "line-join": "round", visibility: adminOn ? "visible" : "none"},
-                    paint: {"line-color": "rgb(255,255,255)", "line-width": a.w() + 1.8, "line-opacity": 0.5},
-                  }, slot());
                   m.addLayer({
                     id: aLine(a.key), type: "line", source: aSrc(a.key), "source-layer": a.key,
                     filter: adminFilter(),
                     layout: {"line-cap": "round", "line-join": "round", visibility: adminOn ? "visible" : "none"},
                     paint: {"line-color": rgbOf(c), "line-width": a.w(), "line-opacity": alphaOf(c)},
                   }, slot());
-                  seated.push(aFill(a.key), aCase(a.key), aLine(a.key));
+                  seated.push(aFill(a.key), aLine(a.key));
                 } catch (e) { console.error("admin " + a.key, e); say("admin " + a.key + ": " + ((e && e.message) || e)); continue; }
               }
-              try {
-                m.setLayoutProperty(aCase(a.key), "visibility", adminOn ? "visible" : "none");
-                m.setLayoutProperty(aLine(a.key), "visibility", adminOn ? "visible" : "none");
-              } catch (e) {}
+              try { m.setLayoutProperty(aLine(a.key), "visibility", adminOn ? "visible" : "none"); } catch (e) {}
             }
           };
           // the state and county under a point, from the tiles on screen.
