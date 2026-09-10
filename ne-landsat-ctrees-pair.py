@@ -499,53 +499,92 @@ def _(PYRAMID, grid, http_store, math, np, time):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md("""
-    # Landsat NE Pyramid, and CTrees beside it
+    # New England Landsat mosaic, beside CTrees biomass
 
     [![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/kentstephen/ne-landsat-ctrees-marimo/blob/main/ne-landsat-ctrees-pair.py)
 
-    **Left**: the New England leaf-on mosaic from the pyramid on the bucket, never
-    covered. **Right**: one H3 fill of CTrees biomass over the same camera.
-    Pan either map and both move. Hover a hexagon on either side and its
-    ring is drawn on both.
+    A side-by-side view of 26 years of forest change across the six New
+    England states, 2000 to 2025. Two maps share one camera: pan or zoom
+    either and both move; hover a hexagon on either side and its outline is
+    drawn on both.
+
+    **Left**: the annual leaf-on Landsat mosaic, one year at a time, in true
+    colour or NDVI. The picture is never covered by a fill.
+    **Right**: CTrees aboveground biomass folded to H3 hexagons over the same
+    view, showing either the change between two years or the stock at one,
+    with the per-pixel uncertainty drawn as opacity.
+
+    Nothing is read from disk. Every layer streams over HTTP or S3 from
+    public buckets, so the notebook runs anywhere with a network connection.
+
+    ## Datasets
+
+    | Layer | Source | Resolution and extent | Licence |
+    |---|---|---|---|
+    | Leaf-on Landsat mosaic | [landsat-mosaics-new-england](https://source.coop/kentstephen/landsat-mosaics-new-england) on Source Cooperative, built by [ne-landsat-temporal-mosaic](https://github.com/kentstephen/ne-landsat-temporal-mosaic) from Landsat Collection 2 surface reflectance | Zarr v3 multiscales pyramid, 30 m to 3840 m, annual 2000 to 2025, with a `source` plane recording which acquisition each pixel came from | CC0-1.0 |
+    | Aboveground biomass | CTrees global AGB, Icechunk store on AWS Open Data (`ctrees-agb-100m-global`). Yang, Saatchi et al. 2026, doi 10.82924/7vmb-zv66 | 100 m, annual 2000 to 2025, Mg/ha, with a residual standard error per pixel and year | CC-BY 4.0 |
+    | State clip | TIGER/Line 2024, U.S. Census Bureau, the six states dissolved to the 3 nautical mile limit. Shipped as `supplemental/tiger_states.parquet` beside the mosaic | Vector | Public domain |
+    | Water mask | National Hydrography Dataset High Resolution, USGS: lakes, ponds, reservoirs, estuaries, bays and wide rivers of 1 ha and up. Shipped as `supplemental/nhd_water_bodies.parquet` | Vector | Public domain |
+    | Wildlands | Wildlands of New England GIS Data 1900-2022, Harvard Forest Data Archive HF435. Foster, Johnson and Hall 2023. Shipped as `supplemental/hf435_wildlands.parquet` | 426 polygons | CC0 |
+    | State and county boundaries | Overture Maps divisions, PMTiles from [cboettig/overturemaps](https://source.coop/cboettig/overturemaps) on Source Cooperative, release 2026-02-18.0 | Vector tiles, read live by the browser | CDLA Permissive 2.0 |
+    | Town under a click | Overture Maps divisions, GeoParquet from [fused/overture](https://source.coop/fused/overture) on Source Cooperative, release 2026-05-20-0, one DuckDB point query | Vector | CDLA Permissive 2.0 |
+    | Basemap and place search | Tiles by OpenFreeMap, geocoding by Photon (komoot), both on OpenStreetMap data | | ODbL |
+
+    ## How the panes are built
+
+    - **The mosaic** is rendered in the kernel from the pyramid. At each zoom
+      the level whose pixel is the finest not smaller than the screen pixel
+      is read, so a zoomed-out view costs a few chunks and a zoomed-in one
+      reads level 0 at 30 m.
+    - **The biomass** is read for the box on screen once, all 26 years, then
+      averaged into H3 hexagons at resolution 9 and coarser. The hexagons
+      fold from zoom 9 and stop at resolution 9, about one CTrees pixel,
+      while the picture keeps zooming. Below zoom 9 the right pane is empty.
+    - **Clipping** happens in the kernel. The picture goes transparent
+      outside the six states; the fold averages only the CTrees samples
+      inside them and drops a hexagon when fewer than half its samples are
+      inside. Water is removed the same way, at the pixel level.
+    - **The loss year** is the first year the biomass falls past both a
+      fraction and an absolute threshold from the window's running maximum.
+      It has no fill of its own: the year slider shows the fall itself, and
+      a click names the year for the cell.
+
+    ## Controls
 
     - **YEAR** (the slider, `[` `]`, or the arrow keys): 2000 to 2025, one
-      year of the mosaic at a time.
+      year of the mosaic at a time. `b` blinks between the first and last
+      year.
     - **SHOW** (`n`): true colour, or NDVI on the fixed -0.1 to 0.9 scale.
-      **SCALE** is a gain on true colour, under a gamma of 2 (tiles.GAMMA). **FIND** is a Photon geocoder;
-      Enter or a click flies both maps there.
+      **SCALE** is a gain on true colour, under a gamma of 2.
+    - **FIND**: a place name. Enter or a click flies both maps there.
     - **FILL** (keys `1` and `2`): **change**, the biomass at the window's
       to-end minus the from-end, blue where it rose and orange where it
       fell, faint where the change is smaller than the uncertainty of its
-      two ends · **stock**, the biomass at the to-end, on greens, faint
-      where the uncertainty exceeds it. The loss year has no fill of its
-      own: the left pane's year slider shows the fall itself, and a click
-      names the year for the cell.
+      two ends; **stock**, the biomass at the to-end, on greens, faint
+      where the uncertainty exceeds it.
     - **WINDOW** (the slider, keys `-` `=` for the from end and `_` `+` for
-      the to end): whole years 2000 to 2025. All 26 years are read for the
-      box once; a window change is a frame, never a fetch.
-    - **WILDLANDS** (`w`): the 426 Wildlands of New England (2022),
-      conserved land left to natural process. Boundaries only, orange on
-      both panes, at every zoom. A click inside one names it in the console.
-    - **ADMIN** (`s`): state and county boundaries from Overture Maps
-      divisions, read live from Source Cooperative as PMTiles. The basemap's
-      own admin lines are hidden. **WATER MASK** (`m`, on by default): lakes,
-      ponds, reservoirs, bays and wide rivers from NHD HR (1 ha and up) leave
-      the CTrees fold at the pixel level, so no hexagon is drawn over open
-      water and a shore hexagon averages its land pixels only. Off, the fold
-      is the states alone and water reads as zero biomass.
-    - Click a hexagon for its story. Under the LEFT pane: the cell's mosaic
-      NDVI for every year 2000 to 2025, on the fixed NDVI scale, with the
-      year on the slider marked. Under the RIGHT pane: the CTrees stock at
-      both window ends, the change in Mg/ha and in Mg across the cell's
-      hectares, the loss year, the uncertainty, the 26-year biomass series,
-      the town, county and state the click fell in (Overture divisions, live
-      from Source Cooperative), and the wildland, if any. Both series share the same
-      26 years, so the two charts line up.
+      the to end): whole years 2000 to 2025. A window change is a frame,
+      never a fetch.
+    - **WILDLANDS** (`w`): the 426 Wildlands of New England, conserved land
+      left to natural process. Boundaries only, gold on both panes. A click
+      inside one names it in the readout.
+    - **ADMIN** (`s`): state and county boundaries, charcoal on both panes.
+      The basemap's own admin lines are hidden.
+    - **WATER MASK** (`m`, on by default): open water leaves the CTrees fold
+      at the pixel level, so no hexagon is drawn over water and a shore
+      hexagon averages its land pixels only. Off, water reads as zero
+      biomass.
     - `L` toggles the basemap labels, `F` full screen.
 
-    The hexagons fold from zoom 9 and stop at res 9, about one CTrees
-    pixel, while the picture keeps zooming. Below zoom 9 the right pane is
-    empty.
+    ## A click
+
+    Click a hexagon for its story. Under the left pane: the cell's mosaic
+    NDVI for every year 2000 to 2025, with the year on the slider marked.
+    Under the right pane: the CTrees stock at both window ends, the change
+    in Mg/ha and in Mg across the cell's hectares, the loss year, the
+    uncertainty, the 26-year biomass series, the town, county and state the
+    click fell in, and the wildland, if any. Both series share the same 26
+    years, so the two charts line up.
     """)
     return
 
