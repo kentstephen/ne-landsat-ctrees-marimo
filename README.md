@@ -26,6 +26,22 @@ change of window is a frame, not a fetch. The hexagons fold from zoom 9.
 `docs/reading-the-pair.md` explains every control and what the fills and
 the panels mean.
 
+## The second notebook: the mosaic beside its own change
+
+`ne-landsat-change-h3.py` is a fork of the pair with the right-hand map
+swapped. It does not use CTrees data at all. Both panes come from the one
+Landsat mosaic: the composite on the left, and on the right an H3 fill
+folded from the same pyramid, showing where a pixel's index (NBR, NDVI or
+NDMI) fell and stayed down between two years. The fold runs at 30 m when
+zoomed in and coarsens as the view widens, down to res 11 hexagons.
+
+    uv run marimo edit ne-landsat-change-h3.py
+
+Same dependency header, same `uv` setup, Python 3.12 or later. Nothing is
+read from disk. Set `NE_DATA` to point it at a local range-capable http
+server over the same bucket layout (for example `python -m RangeHTTPServer`)
+instead of Source Coop.
+
 ## The data
 
 - The mosaic: [landsat-mosaics-new-england on Source Coop](https://source.coop/kentstephen/landsat-mosaics-new-england),
