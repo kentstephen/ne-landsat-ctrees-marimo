@@ -55,10 +55,12 @@ instead of Source Coop.
   Collection 2 surface reflectance, 30 m to 3840 m, with a `source` plane
   that says which look each pixel came from. CC0-1.0. Built by
   [ne-landsat-temporal-mosaic](https://github.com/kentstephen/ne-landsat-temporal-mosaic).
-- CTrees global aboveground biomass, 100 m, annual 2000 to 2025, with a
-  residual standard error per pixel and year. CC-BY 4.0,
-  doi 10.82924/7vmb-zv66; Yang, Saatchi et al. 2026. Read from its
-  Icechunk store on AWS Open Data.
+- CTrees global aboveground biomass:
+  [ctrees-agb-100m-global on AWS Open Data](https://registry.opendata.aws/ctrees-agb-100m-global/),
+  an Icechunk store of 100 m annual biomass, 2000 to 2025, with a residual
+  standard error per pixel and year. CC-BY 4.0,
+  [doi 10.82924/7vmb-zv66](https://doi.org/10.82924/7vmb-zv66); Yang,
+  Saatchi et al. 2026.
 - Wildlands of New England GIS Data 1900-2022, Harvard Forest Data
   Archive HF435, Foster, Johnson and Hall 2023. CC0.
 - The New England clip from TIGER/Line 2024, U.S. Census Bureau. Water
